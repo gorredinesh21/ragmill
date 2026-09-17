@@ -6,8 +6,8 @@ sharded idempotent ingestion, hybrid BM25 + dense retrieval fused with RRF,
 listwise reranking, cited streaming answers, and a deterministic eval harness
 where *the hybrid-beats-dense claim is a CI test, not a README sentence*.
 
-> **Live:** `https://ragmill-<hash>-uc.a.run.app` (Cloud Run, us-central1,
-> scale-to-zero) · [API docs](https://ragmill-<hash>-uc.a.run.app/docs)
+> **Live:** `https://ragmill-yzzxrxetcq-uc.a.run.app` (Cloud Run, us-central1,
+> scale-to-zero) · [API docs](https://ragmill-yzzxrxetcq-uc.a.run.app/docs)
 > <!-- main-session deploy fills the real URL -->
 
 ## The honest claim table
