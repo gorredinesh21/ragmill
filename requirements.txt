@@ -1,0 +1,9 @@
+fastapi>=0.110
+uvicorn>=0.29
+sse-starlette>=2.0
+pydantic>=2.6
+requests>=2.31
+qdrant-client>=1.9
+rank-bm25>=0.2.2
+fastembed>=0.3
+google-cloud-storage>=2.16  # ingest job only (gs:// corpus + status objects)

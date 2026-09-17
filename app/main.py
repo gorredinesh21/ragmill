@@ -1,0 +1,293 @@
+"""ragmill — RAG service over an arXiv-style corpus.
+
+Local mode (default): zero API keys. fastembed ONNX dense + BM25 sparse +
+RRF fusion in Qdrant-local; extractive MockLLM answer with [n] citations.
+Cloud mode: same retrieval path against Qdrant Cloud + Gemini rerank/answer
+via Vertex (RAGMILL_LLM=vertex).
+
+Endpoints:
+  GET  /api/healthz      liveness + profile/embedder/llm/corpus count
+  POST /api/ingest       {source: corpus|folder, path?, arxiv_ids?, limit?}
+  POST /api/search       {query, k}  hybrid retrieval, no LLM (keyless demo)
+  POST /api/query        {query}  SSE: retrieve -> rerank -> answer (citations)
+                         (alias: POST /api/ask — same stream)
+  POST /api/eval         {limit?}  golden-set hit@3 / hit@10 / MRR, 3 modes
+  GET   /                mini demo UI   GET /docs  OpenAPI
+"""
+import json
+import logging
+import time
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+from sse_starlette.sse import EventSourceResponse
+
+from . import config, corpus as corpus_mod, evaluator, llm as llm_mod
+from .retrieval import HybridRetriever, lexical_rerank
+
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s %(name)s %(levelname)s %(message)s")
+log = logging.getLogger("ragmill")
+
+app = FastAPI(title="ragmill", version="1.0.0",
+              description="RAG at 1M documents — hybrid retrieval, RRF fusion, "
+                          "cited answers. Local mode runs keyless.")
+
+_state: dict = {"retriever": None, "ingest_stats": None, "query_count": 0}
+
+
+def get_retriever() -> HybridRetriever:
+    if _state["retriever"] is None:
+        t0 = time.time()
+        r = HybridRetriever()
+        if not r.ready:
+            # service restart with a persisted collection: rebuild BM25 +
+            # corpus map from Qdrant payloads (no re-embedding)
+            n = r.load_from_store()
+            if n:
+                log.info("loaded %d docs from persisted qdrant in %.2fs",
+                         n, time.time() - t0)
+        _state["retriever"] = r
+        if len(r.records):
+            _state["ingest_stats"] = {"n_in": len(r.records), "restored": True}
+        log.info("retriever init %.2fs (embedder=%s)",
+                 time.time() - t0, r.embedder.name)
+    return _state["retriever"]
+
+
+# ---------------------------------------------------------------- models
+
+class IngestReq(BaseModel):
+    source: str = Field(default="corpus", description="corpus | folder")
+    path: str | None = None
+    arxiv_ids: list[str] | None = None
+    limit: int | None = None
+
+
+class SearchReq(BaseModel):
+    query: str
+    k: int = 8
+
+
+class QueryReq(BaseModel):
+    query: str
+    k_retrieve: int = Field(default=config.TOP_K_RETRIEVE)
+    k_final: int = Field(default=config.TOP_K_FINAL)
+
+
+class EvalReq(BaseModel):
+    limit: int | None = None  # subsample golden set for a quick run
+
+
+# ---------------------------------------------------------------- health
+
+@app.get("/api/healthz")
+def healthz():
+    r = get_retriever()
+    return {
+        "status": "ok",
+        "profile": config.PROFILE,
+        "embedder": r.embedder.name,
+        "dim": r.embedder.dim,
+        "llm": llm_mod.get_llm().name,
+        "corpus_docs": len(r.records),
+        "qdrant_count": (r.ready and _qdrant_count(r)) or 0,
+        "ingest": _state["ingest_stats"],
+        "queries_served": _state["query_count"],
+    }
+
+
+def _qdrant_count(r) -> int:
+    from . import store
+    try:
+        return store.count(r.client)
+    except Exception:
+        return 0
+
+
+# ---------------------------------------------------------------- ingest
+
+@app.post("/api/ingest")
+def ingest(req: IngestReq):
+    """Local-mode ingestion: chunk -> embed -> idempotent Qdrant upsert +
+    BM25 build. The same pipeline (app.corpus + app.store) is what the
+    sharded Cloud Run job (jobs/ingest_job.py) runs at 1M scale."""
+    if req.source == "existing":
+        """Restore the in-process BM25/corpus map from the persisted Qdrant
+        collection without re-embedding (fast boot after a restart)."""
+        n = get_retriever().load_from_store()
+        _state["ingest_stats"] = {"n_in": n, "restored": True}
+        return _state["ingest_stats"]
+    if req.source == "folder":
+        if not req.path:
+            raise HTTPException(422, "source=folder requires path")
+        path = Path(req.path)
+        if not path.exists():
+            raise HTTPException(404, f"no corpus at {path}")
+        files = sorted(path.glob("*.jsonl")) if path.is_dir() else [path]
+        if not files:
+            raise HTTPException(404, f"no .jsonl corpus files at {path}")
+        docs = []
+        for f in files:
+            docs.extend(_read_jsonl(f))
+    else:  # bundled corpus
+        if not config.CORPUS_PATH.exists():
+            raise HTTPException(404, f"corpus not found at "
+                                     f"{config.CORPUS_PATH} — generate it: "
+                                     f"python3 scripts/gen_corpus.py")
+        docs = _read_jsonl(config.CORPUS_PATH)
+
+    if req.arxiv_ids:
+        want = set(req.arxiv_ids)
+        docs = [d for d in docs if d.get("arxiv_id") in want]
+        if not docs:
+            raise HTTPException(404, "none of the arxiv_ids matched")
+    if req.limit:
+        docs = docs[:req.limit]
+    if len(docs) > config.MAX_INGEST_DOCS:
+        raise HTTPException(413, f"limit {len(docs)} > "
+                                 f"RAGMILL_MAX_INGEST ({config.MAX_INGEST_DOCS}); "
+                                 f"use the sharded cloud job for scale")
+    stats = get_retriever().ingest(docs)
+    _state["ingest_stats"] = stats
+    log.info("ingest %s", stats)
+    return stats
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    out = []
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                out.append(json.loads(line))
+    return out
+
+
+# ---------------------------------------------------------------- search
+
+@app.post("/api/search")
+def search(req: SearchReq):
+    r = get_retriever()
+    if not r.ready:
+        raise HTTPException(409, "corpus empty — POST /api/ingest first")
+    t0 = time.time()
+    res = r.hybrid_search(req.query, req.k)
+    return {
+        "query": req.query,
+        "fused": [_brief(c) for c in res["fused"]],
+        "dense_top3": [c["arxiv_id"] for c in res["dense"][:3]],
+        "sparse_top3": [c["arxiv_id"] for c in res["sparse"][:3]],
+        "took_ms": round((time.time() - t0) * 1000, 1),
+    }
+
+
+def _brief(c: dict) -> dict:
+    return {"arxiv_id": c["arxiv_id"], "title": c["title"],
+            "categories": c.get("categories") or [],
+            "rrf_score": c.get("rrf_score"), "score": c.get("score")}
+
+
+# ---------------------------------------------------------------- query (SSE)
+
+@app.post("/api/query")
+@app.post("/api/ask")
+async def query(req: QueryReq):
+    r = get_retriever()
+    if not r.ready:
+        raise HTTPException(409, "corpus empty — POST /api/ingest first")
+    _state["query_count"] += 1
+    llm = llm_mod.get_llm()
+
+    async def gen():
+        timings = {}
+        # -- stage 1: retrieve ------------------------------------------------
+        t0 = time.time()
+        res = r.hybrid_search(req.query, k=req.k_final, fetch=req.k_retrieve)
+        timings["retrieve_ms"] = round((time.time() - t0) * 1000, 1)
+        yield {"event": "stage", "data": json.dumps({
+            "stage": "retrieve",
+            "dense_top3": [c["arxiv_id"] for c in res["dense"][:3]],
+            "sparse_top3": [c["arxiv_id"] for c in res["sparse"][:3]],
+            "fused_top": [_brief(c) for c in res["fused"][:req.k_final]],
+            "took_ms": timings["retrieve_ms"],
+        })}
+        # -- stage 2: rerank --------------------------------------------------
+        t1 = time.time()
+        try:
+            reranked = llm.rerank(req.query, res["fused"], k=req.k_final)
+            reranker = llm.name
+        except Exception as e:  # noqa: BLE001 — degrade, never kill the stream
+            log.warning("rerank failed (%s); lexical fallback", str(e)[:100])
+            reranked = lexical_rerank(req.query, res["fused"], req.k_final)
+            reranker = "lexical-fallback"
+        timings["rerank_ms"] = round((time.time() - t1) * 1000, 1)
+        yield {"event": "stage", "data": json.dumps({
+            "stage": "rerank",
+            "reranker": reranker,
+            "top": [_brief(c) | {"rerank_score": c.get("rerank_score")}
+                    for c in reranked],
+            "took_ms": timings["rerank_ms"],
+        })}
+        # -- stage 3: answer --------------------------------------------------
+        t2 = time.time()
+        try:
+            ans = llm.answer(req.query, reranked)
+        except Exception as e:  # noqa: BLE001
+            log.warning("answer failed: %s", str(e)[:200])
+            ans = {"answer": f"LLM error ({str(e)[:120]}). Retrieved papers "
+                             "are listed in the rerank stage.",
+                   "cited": False, "llm": "error"}
+        timings["answer_ms"] = round((time.time() - t2) * 1000, 1)
+        citations = [{"n": i, "arxiv_id": c["arxiv_id"], "title": c["title"],
+                      "url": f"https://arxiv.org/abs/{c['arxiv_id']}"}
+                     for i, c in enumerate(reranked[:req.k_final], 1)]
+        yield {"event": "stage", "data": json.dumps({
+            "stage": "answer",
+            "answer": ans["answer"],
+            "cited": ans.get("cited", False),
+            "llm": ans.get("llm", "?"),
+            "citations": citations,
+            "took_ms": timings["answer_ms"],
+        })}
+        yield {"event": "done", "data": json.dumps({"timings": timings})}
+
+    return EventSourceResponse(gen())
+
+
+# ---------------------------------------------------------------- eval
+
+@app.post("/api/eval")
+def run_eval(req: EvalReq):
+    r = get_retriever()
+    if not r.ready:
+        raise HTTPException(409, "corpus empty — POST /api/ingest first")
+    if not config.GOLDEN_PATH.exists():
+        raise HTTPException(404, f"golden set not found at "
+                                 f"{config.GOLDEN_PATH} — python3 "
+                                 f"scripts/gen_corpus.py regenerates it")
+    golden = evaluator.load_golden(config.GOLDEN_PATH)
+    if req.limit:
+        golden = golden[:req.limit]
+    t0 = time.time()
+    scores = evaluator.evaluate(r, golden)
+    return {"n_queries": len(golden),
+            "took_s": round(time.time() - t0, 2),
+            "metrics": scores}
+
+
+# ---------------------------------------------------------------- ui
+
+@app.get("/")
+def index():
+    return FileResponse(Path(__file__).resolve().parent.parent /
+                        "static" / "index.html")
+
+
+@app.get("/api/ingest/status")
+def ingest_status():
+    """Local mode: report the last in-process ingest stats. Cloud mode
+    (documented in scripts/launch_1m_ingest.sh) reads per-task status JSON
+    objects from GCS instead."""
+    return {"profile": config.PROFILE, "last_ingest": _state["ingest_stats"]}

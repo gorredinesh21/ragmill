@@ -1,0 +1,22 @@
+name: ci
+on:
+  push: {branches: [master, main]}
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -r requirements.txt pytest httpx ruff
+      - run: python3 scripts/gen_corpus.py --n 5000 --golden 60
+      - run: ruff check app jobs scripts tests eval --select E9,F63,F7,F82
+      - name: pytest (mock LLM, keyless)
+        env:
+          RAGMILL_LLM: mock
+          RAGMILL_EMBEDDER: auto
+        run: pytest -q -m "not live"
+      - name: docker build
+        run: docker build -t ragmill-ci .

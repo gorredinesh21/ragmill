@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ragmill — RAG at 1M documents</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font: 15px/1.55 ui-sans-serif, system-ui, sans-serif;
+         background:#0d1117; color:#e6edf3; }
+  main { max-width: 880px; margin: 0 auto; padding: 40px 20px 80px; }
+  h1 { font-size: 26px; margin:0 0 4px; }
+  h1 span { color:#58a6ff; }
+  .sub { color:#8b949e; margin-bottom:28px; }
+  .box { background:#161b22; border:1px solid #30363d; border-radius:10px;
+         padding:18px 20px; margin-bottom:18px; }
+  input[type=text] { width:100%; padding:10px 12px; border-radius:8px;
+    border:1px solid #30363d; background:#0d1117; color:#e6edf3; font-size:15px; }
+  button { margin-top:10px; padding:8px 16px; border-radius:8px; border:1px solid;
+    background:#238636; border-color:#2ea043; color:#fff; font-size:14px;
+    cursor:pointer; }
+  button.sec { background:#21262d; border-color:#30363d; }
+  button:disabled { opacity:.5; cursor:default; }
+  .stage { border-left:3px solid #30363d; padding:2px 12px; margin:14px 0; }
+  .stage.retrieve{border-color:#58a6ff}.stage.rerank{border-color:#d29922}
+  .stage.answer{border-color:#3fb950}
+  .stage h4 { margin:6px 0 4px; font-size:13px; color:#8b949e;
+    text-transform:uppercase; letter-spacing:.4px; }
+  .paper { padding:6px 0; border-bottom:1px solid #21262d; }
+  .paper b { color:#e6edf3; }
+  .id { color:#58a6ff; font-family:ui-monospace,monospace; font-size:13px; }
+  .score { color:#8b949e; font-family:ui-monospace,monospace; font-size:12px; }
+  .answer { white-space:pre-wrap; }
+  .cite { font-size:12px; color:#8b949e; }
+  .cite a { color:#58a6ff; text-decoration:none; }
+  table.mini { width:100%; border-collapse:collapse; font-size:13px; }
+  table.mini td, table.mini th { padding:4px 8px; border-bottom:1px solid #21262d; }
+  .footer { color:#8b949e; font-size:12.5px; margin-top:30px; }
+  code { background:#21262d; padding:1px 5px; border-radius:4px; font-size:12.5px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>rag<span>mill</span></h1>
+  <div class="sub">hybrid retrieval (BM25 + dense, RRF-fused) + rerank + cited answers —
+    <a href="/docs" style="color:#58a6ff">API docs</a> ·
+    <a href="https://github.com/gorredinesh21/ragmill" style="color:#58a6ff">repo</a></div>
+
+  <div class="box">
+    <input id="q" type="text" placeholder="e.g. reciprocal rank fusion for hybrid retrieval"
+           value="sparse and dense retrieval fusion">
+    <button onclick="doSearch()">Search (no LLM)</button>
+    <button class="sec" onclick="doAsk()">Ask (SSE: retrieve → rerank → answer)</button>
+    <div id="meta" class="score" style="margin-top:8px"></div>
+  </div>
+
+  <div id="out"></div>
+
+  <div class="footer">
+    <p>Local mode: fastembed ONNX bge-small (384d) + rank-bm25 + Qdrant local + RRF — zero API keys.
+    With GCP credentials the same pipeline reranks and answers with gemini-2.5-flash.
+    See <code>POST /api/eval</code> for hit@3 / hit@10 / MRR across dense / sparse / hybrid.</p>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function esc(s){ const d=document.createElement('div'); d.textContent=s??''; return d.innerHTML; }
+
+async function doSearch(){
+  const q = $('q').value.trim(); if(!q) return;
+  $('out').innerHTML = '<div class="box">searching…</div>';
+  const r = await fetch('/api/search', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({query:q, k:8})});
+  const b = await r.json();
+  $('meta').textContent = `hybrid search — ${b.took_ms} ms · dense top: ${b.dense_top3.join(', ')} · sparse top: ${b.sparse_top3.join(', ')}`;
+  $('out').innerHTML = '<div class="box">' + b.fused.map((p,i) =>
+    `<div class="paper"><span class="id">${esc(p.arxiv_id)}</span> ·
+     <span class="score">rrf ${p.rrf_score}</span><br><b>${esc(p.title)}</b>
+     <div class="score">${esc((p.categories||[]).join(' '))}</div></div>`).join('') + '</div>';
+}
+
+async function doAsk(){
+  const q = $('q').value.trim(); if(!q) return;
+  $('out').innerHTML = ''; $('meta').textContent = 'streaming…';
+  const r = await fetch('/api/query', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({query:q})});
+  const reader = r.body.getReader(); const dec = new TextDecoder();
+  let buf='', stage=null, box=null;
+  while(true){
+    const {done, value} = await reader.read(); if(done) break;
+    buf += dec.decode(value, {stream:true});
+    let idx;
+    while((idx = buf.indexOf('\n\n')) >= 0){
+      const chunk = buf.slice(0, idx); buf = buf.slice(idx+2);
+      let ev='message', data='';
+      for(const line of chunk.split('\n')){
+        if(line.startsWith('event:')) ev = line.slice(6).trim();
+        if(line.startsWith('data:')) data += line.slice(5).trim();
+      }
+      if(!data) continue;
+      try { handle(ev, JSON.parse(data)); } catch(e){}
+    }
+  }
+
+  function handle(ev, d){
+    if(ev === 'stage'){
+      if(d.stage==='retrieve'){
+        box = document.createElement('div');
+        box.className = 'box stage retrieve';
+        box.innerHTML = `<h4>① retrieve — ${d.took_ms} ms</h4>` +
+          d.fused_top.map(p=>`<div class="paper"><span class="id">${esc(p.arxiv_id)}</span> <b>${esc(p.title)}</b> <span class="score">rrf ${p.rrf_score}</span></div>`).join('');
+        $('out').appendChild(box);
+      }
+      if(d.stage==='rerank'){
+        box = document.createElement('div');
+        box.className = 'box stage rerank';
+        box.innerHTML = `<h4>② rerank — ${d.reranker} — ${d.took_ms} ms</h4>` +
+          d.top.map(p=>`<div class="paper"><span class="id">${esc(p.arxiv_id)}</span> <b>${esc(p.title)}</b> <span class="score">${p.rerank_score ?? ''}</span></div>`).join('');
+        $('out').appendChild(box);
+      }
+      if(d.stage==='answer'){
+        box = document.createElement('div');
+        box.className = 'box stage answer';
+        box.innerHTML = `<h4>③ answer — ${d.llm} — ${d.took_ms} ms</h4>
+          <div class="answer">${esc(d.answer)}</div>
+          <div class="cite" style="margin-top:10px">${d.citations.map(c=>
+            `[${c.n}] <a href="${c.url}" target="_blank">${esc(c.arxiv_id)} — ${esc(c.title)}</a>`).join('<br>')}</div>`;
+        $('out').appendChild(box);
+      }
+    }
+    if(ev === 'done'){
+      $('meta').textContent = 'timings: ' + JSON.stringify(d.timings);
+    }
+  }
+}
+</script>
+</body>
+</html>

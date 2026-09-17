@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+data/qdrant_local/
+data/*.api-test.jsonl
+nohup.out
+*.egg-info/
+.ruff_cache/

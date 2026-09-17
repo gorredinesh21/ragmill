@@ -1,0 +1,23 @@
+{
+  "n_queries": 60,
+  "embedder": "fastembed:BAAI/bge-small-en-v1.5",
+  "metrics": {
+    "dense": {
+      "hit@3": 0.35,
+      "hit@10": 0.6667,
+      "mrr": 0.3125
+    },
+    "sparse": {
+      "hit@3": 0.3833,
+      "hit@10": 0.6333,
+      "mrr": 0.3418
+    },
+    "hybrid": {
+      "hit@3": 0.3833,
+      "hit@10": 0.7167,
+      "mrr": 0.3642
+    },
+    "delta_hit10_hybrid_vs_dense": 0.05,
+    "latency_ms_per_query": 170.8
+  }
+}
