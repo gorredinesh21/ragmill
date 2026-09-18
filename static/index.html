@@ -3,141 +3,386 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ragmill — RAG at 1M documents</title>
+<title>RAGMill — Ask questions, get cited answers</title>
 <style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body { margin:0; font: 15px/1.55 ui-sans-serif, system-ui, sans-serif;
-         background:#0d1117; color:#e6edf3; }
-  main { max-width: 880px; margin: 0 auto; padding: 40px 20px 80px; }
-  h1 { font-size: 26px; margin:0 0 4px; }
-  h1 span { color:#58a6ff; }
-  .sub { color:#8b949e; margin-bottom:28px; }
-  .box { background:#161b22; border:1px solid #30363d; border-radius:10px;
-         padding:18px 20px; margin-bottom:18px; }
-  input[type=text] { width:100%; padding:10px 12px; border-radius:8px;
-    border:1px solid #30363d; background:#0d1117; color:#e6edf3; font-size:15px; }
-  button { margin-top:10px; padding:8px 16px; border-radius:8px; border:1px solid;
-    background:#238636; border-color:#2ea043; color:#fff; font-size:14px;
-    cursor:pointer; }
-  button.sec { background:#21262d; border-color:#30363d; }
-  button:disabled { opacity:.5; cursor:default; }
-  .stage { border-left:3px solid #30363d; padding:2px 12px; margin:14px 0; }
-  .stage.retrieve{border-color:#58a6ff}.stage.rerank{border-color:#d29922}
-  .stage.answer{border-color:#3fb950}
-  .stage h4 { margin:6px 0 4px; font-size:13px; color:#8b949e;
-    text-transform:uppercase; letter-spacing:.4px; }
-  .paper { padding:6px 0; border-bottom:1px solid #21262d; }
-  .paper b { color:#e6edf3; }
-  .id { color:#58a6ff; font-family:ui-monospace,monospace; font-size:13px; }
-  .score { color:#8b949e; font-family:ui-monospace,monospace; font-size:12px; }
-  .answer { white-space:pre-wrap; }
-  .cite { font-size:12px; color:#8b949e; }
-  .cite a { color:#58a6ff; text-decoration:none; }
-  table.mini { width:100%; border-collapse:collapse; font-size:13px; }
-  table.mini td, table.mini th { padding:4px 8px; border-bottom:1px solid #21262d; }
-  .footer { color:#8b949e; font-size:12.5px; margin-top:30px; }
-  code { background:#21262d; padding:1px 5px; border-radius:4px; font-size:12.5px; }
+  :root{
+    color-scheme: light dark;
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --txt:#e6edf3;
+    --muted:#8b949e; --accent:#58a6ff; --green:#3fb950; --amber:#d29922;
+    --red:#f85149;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;font:16px/1.6 ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;
+       background:var(--bg);color:var(--txt)}
+  main{max-width:880px;margin:0 auto;padding:32px 20px 60px}
+  a{color:var(--accent)}
+
+  /* ---------- hero ---------- */
+  .hero{text-align:center;padding:26px 0 8px}
+  .hero h1{font-size:40px;margin:0 0 10px;letter-spacing:-.5px}
+  .hero h1 span{color:var(--accent)}
+  .promise{font-size:19px;margin:0 auto 6px;max-width:640px}
+  .scale-note{color:var(--muted);font-size:14.5px;margin:0 0 22px}
+
+  /* ---------- steps ---------- */
+  .steps{display:flex;gap:12px;margin:0 0 22px;flex-wrap:wrap}
+  .step{flex:1 1 220px;background:var(--panel);border:1px solid var(--line);
+        border-radius:10px;padding:14px 16px;font-size:14px}
+  .step b{display:block;font-size:15px;margin-bottom:4px}
+  .step .n{display:inline-flex;width:22px;height:22px;border-radius:50%;
+           background:var(--accent);color:#0d1117;font-weight:700;font-size:13px;
+           align-items:center;justify-content:center;margin-right:8px}
+  .step p{margin:0;color:var(--muted)}
+  .step p strong{color:var(--txt);font-weight:600}
+
+  /* ---------- demo ---------- */
+  .demo{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+        padding:18px 20px;margin-bottom:26px}
+  .demo label{display:block;font-size:13px;color:var(--muted);
+              text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+  .qrow{display:flex;gap:10px;flex-wrap:wrap}
+  input[type=text]{flex:1 1 320px;min-width:0;padding:12px 14px;border-radius:10px;
+    border:1px solid var(--line);background:var(--bg);color:var(--txt);font-size:16px}
+  input[type=text]:focus{outline:2px solid var(--accent);outline-offset:-1px}
+  .btns{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+  button{padding:11px 20px;border-radius:10px;border:1px solid;cursor:pointer;
+         font-size:15px;font-weight:600}
+  #askBtn{background:#238636;border-color:#2ea043;color:#fff}
+  #searchBtn{background:#21262d;border-color:var(--line);color:var(--txt)}
+  button:disabled{opacity:.5;cursor:default}
+  .chips{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap}
+  .chips .lbl{font-size:12.5px;color:var(--muted);align-self:center;margin-right:2px}
+  .chip{background:#21262d;border:1px solid var(--line);color:var(--txt);
+        border-radius:999px;padding:6px 13px;font-size:13.5px;cursor:pointer;font-weight:400}
+  .chip:hover{border-color:var(--accent)}
+  #meta{color:var(--muted);font-family:ui-monospace,monospace;font-size:12.5px;
+        margin-top:12px;min-height:18px}
+
+  /* ---------- result stages ---------- */
+  .stage{background:var(--panel);border:1px solid var(--line);border-left-width:4px;
+         border-radius:10px;padding:14px 18px;margin:14px 0}
+  .stage.retrieve{border-left-color:var(--accent)}
+  .stage.rerank{border-left-color:var(--amber)}
+  .stage.answer{border-left-color:var(--green)}
+  .stage h3{margin:0 0 10px;font-size:12.5px;color:var(--muted);
+            text-transform:uppercase;letter-spacing:.5px;font-weight:600}
+  .paper{padding:7px 0;border-bottom:1px solid #21262d;font-size:14px}
+  .paper:last-child{border-bottom:none}
+  .paper b{font-weight:600}
+  .paper .detail{color:var(--muted);font-size:13px;margin-top:2px}
+  .id{color:var(--accent);font-family:ui-monospace,monospace;font-size:12.5px}
+  .score{color:var(--muted);font-family:ui-monospace,monospace;font-size:12px}
+  .answer{white-space:pre-wrap;font-size:15px}
+  .answer .citem{color:var(--accent);text-decoration:none;font-weight:700;font-size:12px;vertical-align:super}
+  .sources{margin-top:14px;border-top:1px solid #21262d;padding-top:10px}
+  .sources h4{margin:0 0 6px;font-size:12px;color:var(--muted);
+              text-transform:uppercase;letter-spacing:.5px}
+  .src{padding:5px 0;font-size:13.5px}
+  .src a{color:var(--accent);text-decoration:none}
+  .src a:hover{text-decoration:underline}
+  .src .n{display:inline-block;min-width:22px;color:var(--muted);
+          font-family:ui-monospace,monospace}
+
+  /* ---------- errors ---------- */
+  .error-box{background:#3d1418;border:1px solid var(--red);border-radius:10px;
+             padding:14px 18px;margin:14px 0;color:#ffb3ad}
+  .error-box b{color:var(--red);text-transform:uppercase;font-size:12.5px;
+               letter-spacing:.5px;display:block;margin-bottom:4px}
+
+  /* ---------- under the hood ---------- */
+  .hood{margin-top:34px}
+  .hood h2{font-size:22px;margin:0 0 14px}
+  .hood .grid{display:flex;gap:12px;flex-wrap:wrap}
+  .card{flex:1 1 240px;background:var(--panel);border:1px solid var(--line);
+        border-radius:10px;padding:16px 18px;font-size:14px}
+  .card h3{margin:0 0 8px;font-size:15px}
+  .card p{margin:0;color:var(--muted);font-size:13.5px}
+  .card p strong{color:var(--txt)}
+  .num{font-family:ui-monospace,monospace;font-size:12.5px;color:var(--green)}
+  .hood .why{color:var(--muted);font-size:14.5px;margin:14px 0 0;max-width:720px}
+  .hood .why strong{color:var(--txt)}
+
+  /* ---------- footer ---------- */
+  footer{border-top:1px solid var(--line);margin-top:40px;padding-top:18px;
+         color:var(--muted);font-size:13px;display:flex;gap:8px;flex-wrap:wrap;
+         align-items:center}
+  footer .dot{color:var(--line)}
+  @media(max-width:640px){
+    .hero h1{font-size:32px}
+    .promise{font-size:17px}
+    .qrow{flex-direction:column}
+    .btns button{flex:1}
+  }
 </style>
 </head>
 <body>
 <main>
-  <h1>rag<span>mill</span></h1>
-  <div class="sub">hybrid retrieval (BM25 + dense, RRF-fused) + rerank + cited answers —
-    <a href="/docs" style="color:#58a6ff">API docs</a> ·
-    <a href="https://github.com/gorredinesh21/ragmill" style="color:#58a6ff">repo</a></div>
 
-  <div class="box">
-    <input id="q" type="text" placeholder="e.g. reciprocal rank fusion for hybrid retrieval"
-           value="sparse and dense retrieval fusion">
-    <button onclick="doSearch()">Search (no LLM)</button>
-    <button class="sec" onclick="doAsk()">Ask (SSE: retrieve → rerank → answer)</button>
-    <div id="meta" class="score" style="margin-top:8px"></div>
+  <!-- ================= hero ================= -->
+  <div class="hero">
+    <h1>RAG<span>Mill</span></h1>
+    <p class="promise">Ask questions about a document collection — answers come
+      with numbered sources you can check.</p>
+    <p class="scale-note">Built to scale to a million documents. Try it right now
+      on the bundled 5,000-paper research corpus — no signup, nothing to install.</p>
   </div>
 
+  <!-- ================= 3 steps ================= -->
+  <div class="steps">
+    <div class="step"><b><span class="n">1</span>Type a question below</b>
+      <p>Or tap one of the example questions.</p></div>
+    <div class="step"><b><span class="n">2</span>Hybrid search finds the passages</b>
+      <p>Two engines run at once — <strong>meaning</strong> (vectors) and
+      <strong>exact words</strong> (keyword) — and their rankings are fused,
+      so neither one's blind spots win.</p></div>
+    <div class="step"><b><span class="n">3</span>An answer arrives, with receipts</b>
+      <p>The LLM writes a short answer citing <strong>[1][2]</strong> — click the
+      numbered sources under the answer to verify every claim.</p></div>
+  </div>
+
+  <!-- ================= demo ================= -->
+  <div class="demo">
+    <label for="q">Your question</label>
+    <div class="qrow">
+      <input id="q" type="text" enterkeyhint="search"
+             placeholder="e.g. How do you make transformers handle long documents?"
+             value="sparse attention for long-document language modeling">
+    </div>
+    <div class="btns">
+      <button id="askBtn" onclick="doAsk()">Ask — answer with sources</button>
+      <button id="searchBtn" onclick="doSearch()">Search only (see the raw matches)</button>
+    </div>
+    <div class="chips">
+      <span class="lbl">Try:</span>
+      <button class="chip" onclick="useChip(this)">sparse attention for long-document language modeling</button>
+      <button class="chip" onclick="useChip(this)">reciprocal rank fusion for hybrid retrieval</button>
+      <button class="chip" onclick="useChip(this)">dense passage retrieval for question answering</button>
+      <button class="chip" onclick="useChip(this)">billion-scale nearest neighbor search with HNSW indexing</button>
+      <button class="chip" onclick="useChip(this)">federated learning across hospital networks</button>
+    </div>
+    <div id="meta"></div>
+  </div>
+
+  <!-- streamed results land here -->
   <div id="out"></div>
 
-  <div class="footer">
-    <p>Local mode: fastembed ONNX bge-small (384d) + rank-bm25 + Qdrant local + RRF — zero API keys.
-    With GCP credentials the same pipeline reranks and answers with gemini-2.5-flash.
-    See <code>POST /api/eval</code> for hit@3 / hit@10 / MRR across dense / sparse / hybrid.</p>
+  <!-- ================= under the hood ================= -->
+  <div class="hood">
+    <h2>What's under the hood</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Hybrid search beats vector-only</h3>
+        <p>Keyword search nails exact terms like "HNSW"; vector search nails
+           paraphrases. Fusing both wins on our measured eval:
+           <strong>hit@10 <span class="num">0.72</span> vs
+           <span class="num">0.67</span></strong> dense-only,
+           <strong>MRR <span class="num">0.36</span> vs
+           <span class="num">0.31</span></strong>
+           (<a href="/api/eval/results" target="_blank">raw eval JSON</a>,
+           60 golden queries — rerun it yourself via <code>POST /api/eval</code>).</p>
+      </div>
+      <div class="card">
+        <h3>Million-document ingest</h3>
+        <p>Embeddings run <strong>inside the containers</strong> (no embedding
+           API quotas), as parallel sharded Cloud Run jobs. Every document ID is
+           deterministic, so a crashed job just re-runs and overwrites — the
+           count never double-counts.</p>
+      </div>
+      <div class="card">
+        <h3>Honest, cheap demo</h3>
+        <p>This page runs on a scale-to-zero Cloud Run service that costs
+           <strong>&lt; $1/month</strong>. No LLM key configured? Answers fall
+           back to a clearly-labeled extractive mode — nothing pretends to be
+           something it isn't.</p>
+      </div>
+    </div>
+    <p class="why"><strong>Why keyword + vectors together win:</strong> vector
+      search retrieves by meaning and misses rare exact terms; keyword search
+      retrieves exact terms and misses paraphrases. Reciprocal Rank Fusion
+      merges both rankings, and each engine covers the other's failure mode —
+      measured above.</p>
   </div>
+
+  <!-- ================= footer ================= -->
+  <footer>
+    <a href="https://github.com/gorredinesh21/ragmill">GitHub</a><span class="dot">·</span>
+    <span>FastAPI + fastembed + Qdrant + Gemini on Cloud Run</span><span class="dot">·</span>
+    <a href="/docs">API docs</a>
+  </footer>
 </main>
 
 <script>
 const $ = id => document.getElementById(id);
+const ASK_TIMEOUT_MS = 90000;   // hard client-side deadline for the ask stream
+let askSeq = 0;                 // ignore stale streams after a new question
 
 function esc(s){ const d=document.createElement('div'); d.textContent=s??''; return d.innerHTML; }
 
+function showError(title, msg){
+  const el = document.createElement('div');
+  el.className = 'error-box';
+  el.innerHTML = `<b>${esc(title)}</b>${esc(msg)}`;
+  $('out').appendChild(el);
+}
+
+function setBusy(b){
+  $('askBtn').disabled = b; $('searchBtn').disabled = b;
+  if(b){ $('meta').textContent = 'streaming…'; }
+}
+
+function useChip(btn){ $('q').value = btn.textContent.trim(); doAsk(); }
+
+/* ======================= search (no LLM) ======================= */
+
 async function doSearch(){
   const q = $('q').value.trim(); if(!q) return;
-  $('out').innerHTML = '<div class="box">searching…</div>';
-  const r = await fetch('/api/search', {method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({query:q, k:8})});
-  const b = await r.json();
-  $('meta').textContent = `hybrid search — ${b.took_ms} ms · dense top: ${b.dense_top3.join(', ')} · sparse top: ${b.sparse_top3.join(', ')}`;
-  $('out').innerHTML = '<div class="box">' + b.fused.map((p,i) =>
-    `<div class="paper"><span class="id">${esc(p.arxiv_id)}</span> ·
-     <span class="score">rrf ${p.rrf_score}</span><br><b>${esc(p.title)}</b>
-     <div class="score">${esc((p.categories||[]).join(' '))}</div></div>`).join('') + '</div>';
+  $('out').innerHTML = ''; $('meta').textContent = 'searching…';
+  setBusy(true);
+  try{
+    const r = await fetch('/api/search', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({query:q, k:8})});
+    if(!r.ok){
+      let msg = 'HTTP ' + r.status;
+      try{ const b = await r.json(); if(b.detail) msg = b.detail; }catch(e){}
+      throw new Error(msg);
+    }
+    const b = await r.json();
+    $('meta').textContent =
+      `hybrid search — ${b.took_ms} ms · dense top: ${b.dense_top3.join(', ')} · sparse top: ${b.sparse_top3.join(', ')}`;
+    if(!b.fused.length){
+      showError('No results', 'Retrieval returned 0 documents — try different wording.');
+      return;
+    }
+    const box = document.createElement('div');
+    box.className = 'stage retrieve';
+    box.innerHTML = '<h3>hybrid search — top matches</h3>' + b.fused.map((p,i) =>
+      `<div class="paper"><span class="id">${esc(p.arxiv_id)}</span> ·
+       <span class="score">rrf ${p.rrf_score}</span><br><b>${i+1}. ${esc(p.title)}</b>
+       <div class="detail">${esc((p.categories||[]).join(' · '))}</div></div>`).join('');
+    $('out').appendChild(box);
+  }catch(e){
+    showError('Search failed', String(e.message||e));
+  }finally{
+    setBusy(false);
+  }
 }
+
+/* ======================= ask (SSE, always terminates) ======================= */
 
 async function doAsk(){
   const q = $('q').value.trim(); if(!q) return;
-  $('out').innerHTML = ''; $('meta').textContent = 'streaming…';
-  const r = await fetch('/api/query', {method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({query:q})});
-  const reader = r.body.getReader(); const dec = new TextDecoder();
-  let buf='', stage=null, box=null;
-  while(true){
-    const {done, value} = await reader.read(); if(done) break;
-    buf += dec.decode(value, {stream:true});
-    let idx;
-    while((idx = buf.indexOf('\n\n')) >= 0){
-      const chunk = buf.slice(0, idx); buf = buf.slice(idx+2);
-      let ev='message', data='';
-      for(const line of chunk.split('\n')){
-        if(line.startsWith('event:')) ev = line.slice(6).trim();
-        if(line.startsWith('data:')) data += line.slice(5).trim();
-      }
-      if(!data) continue;
-      try { handle(ev, JSON.parse(data)); } catch(e){}
+  const seq = ++askSeq;
+  $('out').innerHTML = '';
+  setBusy(true);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ASK_TIMEOUT_MS);
+  let terminal = false;   // became true on `done` or `error`
+
+  const fail = (title, msg) => { terminal = true; showError(title, msg); };
+
+  try{
+    const r = await fetch('/api/query', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({query:q}), signal: ctrl.signal});
+    if(!r.ok || !r.body){
+      let msg = 'HTTP ' + r.status;
+      try{ const b = await r.json(); if(b.detail) msg = b.detail; }catch(e){}
+      throw new Error(msg);
     }
+    const reader = r.body.getReader(); const dec = new TextDecoder();
+    let buf='';
+    while(!terminal){
+      const {done, value} = await reader.read(); if(done) break;
+      buf += dec.decode(value, {stream:true});
+      let idx;
+      while((idx = buf.indexOf('\n\n')) >= 0){
+        const chunk = buf.slice(0, idx); buf = buf.slice(idx+2);
+        let ev='message', data='';
+        for(const line of chunk.split('\n')){
+          if(line.startsWith('event:')) ev = line.slice(6).trim();
+          if(line.startsWith('data:')) data += line.slice(5).trim();
+        }
+        if(!data) continue;
+        try { handle(ev, JSON.parse(data)); } catch(e){}
+        if(terminal) break;
+      }
+    }
+    if(!terminal && seq === askSeq){
+      fail('Stream ended without an answer',
+           'The server closed the stream before answering. Please try again.');
+    }
+  }catch(e){
+    if(seq !== askSeq) return;
+    if(e.name === 'AbortError'){
+      fail('Timed out after 90 seconds',
+           'No answer arrived within 90s — the service may still be waking up. Try again.');
+    }else{
+      fail('Ask failed', String(e.message||e));
+    }
+  }finally{
+    clearTimeout(timer);
+    if(seq === askSeq) setBusy(false);
   }
 
+  /* ---- render one SSE event (ignored if a newer question took over) ---- */
   function handle(ev, d){
-    if(ev === 'stage'){
-      if(d.stage==='retrieve'){
-        box = document.createElement('div');
-        box.className = 'box stage retrieve';
-        box.innerHTML = `<h4>① retrieve — ${d.took_ms} ms</h4>` +
-          d.fused_top.map(p=>`<div class="paper"><span class="id">${esc(p.arxiv_id)}</span> <b>${esc(p.title)}</b> <span class="score">rrf ${p.rrf_score}</span></div>`).join('');
-        $('out').appendChild(box);
-      }
-      if(d.stage==='rerank'){
-        box = document.createElement('div');
-        box.className = 'box stage rerank';
-        box.innerHTML = `<h4>② rerank — ${d.reranker} — ${d.took_ms} ms</h4>` +
-          d.top.map(p=>`<div class="paper"><span class="id">${esc(p.arxiv_id)}</span> <b>${esc(p.title)}</b> <span class="score">${p.rerank_score ?? ''}</span></div>`).join('');
-        $('out').appendChild(box);
-      }
-      if(d.stage==='answer'){
-        box = document.createElement('div');
-        box.className = 'box stage answer';
-        box.innerHTML = `<h4>③ answer — ${d.llm} — ${d.took_ms} ms</h4>
-          <div class="answer">${esc(d.answer)}</div>
-          <div class="cite" style="margin-top:10px">${d.citations.map(c=>
-            `[${c.n}] <a href="${c.url}" target="_blank">${esc(c.arxiv_id)} — ${esc(c.title)}</a>`).join('<br>')}</div>`;
-        $('out').appendChild(box);
-      }
+    if(seq !== askSeq) return;
+    if(ev === 'error'){
+      fail('Error — ' + (d.code || 'unknown'), d.message || 'unknown error');
+      return;
     }
-    if(ev === 'done'){
-      $('meta').textContent = 'timings: ' + JSON.stringify(d.timings);
+    if(ev !== 'stage') {
+      if(ev === 'done'){
+        terminal = true;
+        const t = d.timings || {};
+        $('meta').textContent =
+          `done — retrieve ${t.retrieve_ms ?? '?'} ms · rerank ${t.rerank_ms ?? '?'} ms · answer ${t.answer_ms ?? '?'} ms`;
+      }
+      return;
+    }
+    if(d.stage === 'retrieve'){
+      const box = document.createElement('div');
+      box.className = 'stage retrieve';
+      box.innerHTML = `<h3>① retrieved passages — ${d.took_ms} ms</h3>` +
+        d.fused_top.map((p,i) =>
+          `<div class="paper"><span class="id">${esc(p.arxiv_id)}</span>
+           <span class="score">rrf ${p.rrf_score}</span><br>
+           <b>${i+1}. ${esc(p.title)}</b>
+           <div class="detail">${esc((p.categories||[]).join(' · '))}</div></div>`).join('');
+      $('out').appendChild(box);
+    }
+    if(d.stage === 'rerank'){
+      const box = document.createElement('div');
+      box.className = 'stage rerank';
+      box.innerHTML = `<h3>② reranked — ${esc(d.reranker)} — ${d.took_ms} ms</h3>` +
+        d.top.map((p,i) =>
+          `<div class="paper"><span class="id">${esc(p.arxiv_id)}</span>
+           <span class="score">${p.rerank_score ?? ''}</span><br>
+           <b>${i+1}. ${esc(p.title)}</b></div>`).join('');
+      $('out').appendChild(box);
+    }
+    if(d.stage === 'answer'){
+      const box = document.createElement('div');
+      box.className = 'stage answer';
+      const linkedAnswer = esc(d.answer)
+        .replace(/\[(\d+)\]/g,
+          (m,n) => `<a class="citem" href="#src-${n}">${m}</a>`);
+      const sources = (d.citations || []).map(c =>
+        `<div class="src" id="src-${c.n}"><span class="n">[${c.n}]</span>
+         <a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title)}</a>
+         <span class="score"> · ${esc(c.arxiv_id)}</span></div>`).join('');
+      box.innerHTML = `<h3>③ answer — ${esc(d.llm)} — ${d.took_ms} ms</h3>
+        <div class="answer">${linkedAnswer}</div>
+        <div class="sources"><h4>Sources — click to verify</h4>${sources}</div>`;
+      $('out').appendChild(box);
     }
   }
 }
+
+/* Enter key runs Ask */
+$('q').addEventListener('keydown', e => { if(e.key === 'Enter') doAsk(); });
 </script>
 </body>
 </html>

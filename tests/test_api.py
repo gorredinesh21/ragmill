@@ -122,3 +122,56 @@ def test_openapi_served(client):
     r = client.get("/openapi.json")
     assert "/api/query" in r.json()["paths"]
     assert "/api/eval" in r.json()["paths"]
+
+
+def test_eval_results_route(client):
+    r = client.get("/api/eval/results")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["metrics"]["hybrid"]["hit@10"] > body["metrics"]["dense"]["hit@10"]
+
+
+# -- empty-corpus ask stream MUST terminate with an error event ---------------
+
+def _stream_events(cl, path, payload):
+    events = []
+    with cl.stream("POST", path, json=payload) as r:
+        assert r.status_code == 200
+        assert "text/event-stream" in r.headers["content-type"]
+        stage = None
+        for line in r.iter_lines():
+            if line.startswith("event:"):
+                stage = line.split(":", 1)[1].strip()
+            elif line.startswith("data:") and stage:
+                events.append((stage, json.loads(line.split(":", 1)[1].strip())))
+    return events
+
+
+class _EmptyCorpusStub:
+    """Not ready, no records — what a fresh instance looks like with no
+    snapshot and no ingest."""
+    ready = False
+    records: dict = {}
+
+
+def test_query_sse_empty_corpus_emits_terminal_error(client, monkeypatch):
+    from app import main as app_main
+    monkeypatch.setattr(app_main, "get_retriever", lambda: _EmptyCorpusStub())
+    events = _stream_events(client, "/api/query", {"query": "anything"})
+    # a terminal `error` event — never a silent, endless stream
+    errs = [d for ev, d in events if ev == "error"]
+    assert len(errs) == 1
+    assert errs[0]["code"] == "corpus_empty"
+    assert "corpus empty" in errs[0]["message"]
+    # and no pipeline stages ran
+    assert not [1 for ev, _ in events if ev == "stage"]
+    assert not [1 for ev, _ in events if ev == "done"]
+
+
+def test_ask_alias_empty_corpus_same_terminal_error(client, monkeypatch):
+    from app import main as app_main
+    monkeypatch.setattr(app_main, "get_retriever", lambda: _EmptyCorpusStub())
+    events = _stream_events(client, "/api/ask", {"query": "anything"})
+    errs = [d for ev, d in events if ev == "error"]
+    assert len(errs) == 1
+    assert errs[0]["code"] == "corpus_empty"

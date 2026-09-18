@@ -17,8 +17,12 @@ COPY jobs ./jobs
 COPY scripts ./scripts
 COPY eval ./eval
 COPY static ./static
-# local-mode corpus is small (2MB) — bundled so the service demo works
-# out of the box; cloud profiles point RAGMILL_SOURCE/QDRANT_URL elsewhere.
+# bundled payloads:
+#   data/corpus_5k.jsonl     ~3.5MB source corpus (regen: scripts/gen_corpus.py)
+#   data/index_snapshot/     ~23MB pre-ingested Qdrant store — restored to the
+#                             writable live path at startup so a cold instance
+#                             answers queries in seconds (regen:
+#                             scripts/build_index_snapshot.py)
 COPY data ./data
 
 # warm the embedding model into the image so cold starts don't download

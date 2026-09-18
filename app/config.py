@@ -36,6 +36,12 @@ QDRANT_URL = os.environ.get("QDRANT_URL", "")            # cloud mode only
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY", "")
 QDRANT_LOCAL_PATH = os.environ.get(
     "RAGMILL_QDRANT_PATH", str(DATA_DIR / "qdrant_local"))
+# Read-only pre-ingested Qdrant store shipped in the Docker image
+# (scripts/build_index_snapshot.py). At startup, if the live store above is
+# empty, it is materialized from this snapshot so a fresh Cloud Run instance
+# answers queries within seconds — no external services, no re-embedding.
+INDEX_SNAPSHOT_DIR = Path(os.environ.get(
+    "RAGMILL_SNAPSHOT_DIR", str(DATA_DIR / "index_snapshot")))
 
 # -- corpus / retrieval -----------------------------------------------------
 CORPUS_PATH = Path(os.environ.get(

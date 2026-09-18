@@ -3,9 +3,16 @@
 Local:  QdrantClient(path=...)   embedded qdrant, file-persisted, zero infra.
 Cloud:  QdrantClient(url=..., api_key=...)  Qdrant Cloud free cluster, used by
         the sharded ingest job and (later) the deployed service.
+
+Boot bootstrap: a pre-ingested store snapshot (data/index_snapshot, built by
+scripts/build_index_snapshot.py) is shipped in the Docker image; a fresh
+instance with an empty live store restores it at startup (see
+restore_snapshot) and rebuilds BM25 from the payloads — no re-embedding.
 """
 import logging
+import shutil
 import time
+from pathlib import Path
 
 from . import config
 
@@ -21,6 +28,37 @@ def get_client():
             timeout=30,
         )
     return QdrantClient(path=config.QDRANT_LOCAL_PATH)
+
+
+def _has_collection(path: Path) -> bool:
+    """A local qdrant dir holds data iff its collection/ subdir is non-empty."""
+    col = Path(path) / "collection"
+    try:
+        return col.is_dir() and any(col.iterdir())
+    except OSError:
+        return False
+
+
+def restore_snapshot(live_path=None, snapshot_dir=None) -> bool:
+    """Materialize the bundled read-only index snapshot into the live
+    (writable) qdrant path when the live store is empty. Never clobbers an
+    existing collection. Returns True if a restore happened."""
+    live = Path(live_path or config.QDRANT_LOCAL_PATH)
+    snap = Path(snapshot_dir or config.INDEX_SNAPSHOT_DIR)
+    if _has_collection(live):
+        return False  # live store already has data — nothing to do
+    if not _has_collection(snap):
+        return False  # no bundled snapshot (e.g. repo checkout without one)
+    t0 = time.time()
+    live.mkdir(parents=True, exist_ok=True)
+    col = live / "collection"
+    if col.exists():
+        shutil.rmtree(col)
+    shutil.copytree(snap / "collection", col)
+    shutil.copy2(snap / "meta.json", live / "meta.json")
+    log.info("restored index snapshot %s -> %s (%.2fs)",
+             snap, live, time.time() - t0)
+    return True
 
 
 def ensure_collection(client, dim: int, collection: str = None) -> bool:

@@ -2,21 +2,25 @@
 
 Local mode (default): zero API keys. fastembed ONNX dense + BM25 sparse +
 RRF fusion in Qdrant-local; extractive MockLLM answer with [n] citations.
-Cloud mode: same retrieval path against Qdrant Cloud + Gemini rerank/answer
-via Vertex (RAGMILL_LLM=vertex).
+Cloud mode: same retrieval path; Gemini rerank/answer via Vertex
+(RAGMILL_LLM=vertex). Cold-start bootstrap: a pre-ingested index snapshot
+shipped in the image (data/index_snapshot) is restored at startup when the
+live store is empty, so a fresh instance serves queries in seconds.
 
 Endpoints:
   GET  /api/healthz      liveness + profile/embedder/llm/corpus count
   POST /api/ingest       {source: corpus|folder, path?, arxiv_ids?, limit?}
   POST /api/search       {query, k}  hybrid retrieval, no LLM (keyless demo)
   POST /api/query        {query}  SSE: retrieve -> rerank -> answer (citations)
-                         (alias: POST /api/ask — same stream)
+                         (alias: POST /api/ask — same stream). Always
+                         terminates: `done` on success, `error` otherwise.
   POST /api/eval         {limit?}  golden-set hit@3 / hit@10 / MRR, 3 modes
-  GET   /                mini demo UI   GET /docs  OpenAPI
+  GET   /                demo UI   GET /docs  OpenAPI
 """
 import json
 import logging
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -24,23 +28,23 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from . import config, corpus as corpus_mod, evaluator, llm as llm_mod
+from . import config, corpus as corpus_mod, evaluator, llm as llm_mod, store
 from .retrieval import HybridRetriever, lexical_rerank
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("ragmill")
 
-app = FastAPI(title="ragmill", version="1.0.0",
-              description="RAG at 1M documents — hybrid retrieval, RRF fusion, "
-                          "cited answers. Local mode runs keyless.")
-
-_state: dict = {"retriever": None, "ingest_stats": None, "query_count": 0}
+_state: dict = {"retriever": None, "ingest_stats": None, "query_count": 0,
+                "bootstrap": None}
 
 
 def get_retriever() -> HybridRetriever:
     if _state["retriever"] is None:
         t0 = time.time()
+        # cloud bootstrap: a fresh instance (empty live store) materializes
+        # the bundled pre-ingested snapshot before opening the client
+        restored = store.restore_snapshot()
         r = HybridRetriever()
         if not r.ready:
             # service restart with a persisted collection: rebuild BM25 +
@@ -52,9 +56,33 @@ def get_retriever() -> HybridRetriever:
         _state["retriever"] = r
         if len(r.records):
             _state["ingest_stats"] = {"n_in": len(r.records), "restored": True}
-        log.info("retriever init %.2fs (embedder=%s)",
-                 time.time() - t0, r.embedder.name)
+        if restored or len(r.records):
+            _state["bootstrap"] = {
+                "snapshot_restored": restored,
+                "boot_s": round(time.time() - t0, 2),
+                "corpus_docs": len(r.records),
+            }
+        log.info("retriever init %.2fs (embedder=%s, docs=%d)",
+                 time.time() - t0, r.embedder.name, len(r.records))
     return _state["retriever"]
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Eager boot: restore the bundled index snapshot + rebuild BM25 at
+    startup (not lazily on the first request) so a cold Cloud Run instance
+    is query-ready within seconds of serving."""
+    t0 = time.time()
+    r = get_retriever()
+    log.info("startup complete in %.1fs — corpus_docs=%d ready=%s",
+             time.time() - t0, len(r.records), r.ready)
+    yield
+
+
+app = FastAPI(title="ragmill", version="1.1.0",
+              description="RAG at 1M documents — hybrid retrieval, RRF fusion, "
+                          "cited answers. Local mode runs keyless.",
+              lifespan=lifespan)
 
 
 # ---------------------------------------------------------------- models
@@ -95,6 +123,7 @@ def healthz():
         "corpus_docs": len(r.records),
         "qdrant_count": (r.ready and _qdrant_count(r)) or 0,
         "ingest": _state["ingest_stats"],
+        "bootstrap": _state["bootstrap"],
         "queries_served": _state["query_count"],
     }
 
@@ -191,72 +220,101 @@ def _brief(c: dict) -> dict:
 
 # ---------------------------------------------------------------- query (SSE)
 
+def _sse_error(code: str, message: str) -> EventSourceResponse:
+    """A terminal `error` SSE event. The ask stream must ALWAYS terminate
+    with a terminal event (answer+done, or error) — the frontend renders
+    error events as a red box instead of spinning forever."""
+    async def one():
+        yield {"event": "error",
+               "data": json.dumps({"code": code, "message": message})}
+    return EventSourceResponse(one())
+
+
 @app.post("/api/query")
 @app.post("/api/ask")
 async def query(req: QueryReq):
     r = get_retriever()
     if not r.ready:
-        raise HTTPException(409, "corpus empty — POST /api/ingest first")
+        return _sse_error(
+            "corpus_empty",
+            "corpus empty — ingest first (POST /api/ingest, or wait for "
+            "the boot snapshot to finish restoring)")
     _state["query_count"] += 1
     llm = llm_mod.get_llm()
 
     async def gen():
         timings = {}
-        # -- stage 1: retrieve ------------------------------------------------
-        t0 = time.time()
-        res = r.hybrid_search(req.query, k=req.k_final, fetch=req.k_retrieve)
-        timings["retrieve_ms"] = round((time.time() - t0) * 1000, 1)
-        yield {"event": "stage", "data": json.dumps({
-            "stage": "retrieve",
-            "dense_top3": [c["arxiv_id"] for c in res["dense"][:3]],
-            "sparse_top3": [c["arxiv_id"] for c in res["sparse"][:3]],
-            "fused_top": [_brief(c) for c in res["fused"][:req.k_final]],
-            "took_ms": timings["retrieve_ms"],
-        })}
-        # -- stage 2: rerank --------------------------------------------------
-        t1 = time.time()
         try:
-            reranked = llm.rerank(req.query, res["fused"], k=req.k_final)
-            reranker = llm.name
-        except Exception as e:  # noqa: BLE001 — degrade, never kill the stream
-            log.warning("rerank failed (%s); lexical fallback", str(e)[:100])
-            reranked = lexical_rerank(req.query, res["fused"], req.k_final)
-            reranker = "lexical-fallback"
-        timings["rerank_ms"] = round((time.time() - t1) * 1000, 1)
-        yield {"event": "stage", "data": json.dumps({
-            "stage": "rerank",
-            "reranker": reranker,
-            "top": [_brief(c) | {"rerank_score": c.get("rerank_score")}
-                    for c in reranked],
-            "took_ms": timings["rerank_ms"],
-        })}
-        # -- stage 3: answer --------------------------------------------------
-        t2 = time.time()
-        try:
-            ans = llm.answer(req.query, reranked)
-        except Exception as e:  # noqa: BLE001
-            log.warning("answer failed: %s", str(e)[:200])
-            ans = {"answer": f"LLM error ({str(e)[:120]}). Retrieved papers "
-                             "are listed in the rerank stage.",
-                   "cited": False, "llm": "error"}
-        timings["answer_ms"] = round((time.time() - t2) * 1000, 1)
-        citations = [{"n": i, "arxiv_id": c["arxiv_id"], "title": c["title"],
-                      "url": f"https://arxiv.org/abs/{c['arxiv_id']}"}
-                     for i, c in enumerate(reranked[:req.k_final], 1)]
-        yield {"event": "stage", "data": json.dumps({
-            "stage": "answer",
-            "answer": ans["answer"],
-            "cited": ans.get("cited", False),
-            "llm": ans.get("llm", "?"),
-            "citations": citations,
-            "took_ms": timings["answer_ms"],
-        })}
-        yield {"event": "done", "data": json.dumps({"timings": timings})}
+            # -- stage 1: retrieve --------------------------------------------
+            t0 = time.time()
+            res = r.hybrid_search(req.query, k=req.k_final,
+                                  fetch=req.k_retrieve)
+            timings["retrieve_ms"] = round((time.time() - t0) * 1000, 1)
+            if not res["fused"]:
+                yield {"event": "error", "data": json.dumps({
+                    "code": "no_results",
+                    "message": "retrieval returned 0 documents for this "
+                               "query — try different wording"})}
+                return
+            yield {"event": "stage", "data": json.dumps({
+                "stage": "retrieve",
+                "dense_top3": [c["arxiv_id"] for c in res["dense"][:3]],
+                "sparse_top3": [c["arxiv_id"] for c in res["sparse"][:3]],
+                "fused_top": [_brief(c) for c in res["fused"][:req.k_final]],
+                "took_ms": timings["retrieve_ms"],
+            })}
+            # -- stage 2: rerank ------------------------------------------------
+            t1 = time.time()
+            try:
+                reranked = llm.rerank(req.query, res["fused"], k=req.k_final)
+                reranker = llm.name
+            except Exception as e:  # noqa: BLE001 — degrade, never kill the stream
+                log.warning("rerank failed (%s); lexical fallback", str(e)[:100])
+                reranked = lexical_rerank(req.query, res["fused"], req.k_final)
+                reranker = "lexical-fallback"
+            timings["rerank_ms"] = round((time.time() - t1) * 1000, 1)
+            yield {"event": "stage", "data": json.dumps({
+                "stage": "rerank",
+                "reranker": reranker,
+                "top": [_brief(c) | {"rerank_score": c.get("rerank_score")}
+                        for c in reranked],
+                "took_ms": timings["rerank_ms"],
+            })}
+            # -- stage 3: answer ------------------------------------------------
+            t2 = time.time()
+            try:
+                ans = llm.answer(req.query, reranked)
+            except Exception as e:  # noqa: BLE001
+                log.warning("answer failed: %s", str(e)[:200])
+                ans = {"answer": f"LLM error ({str(e)[:120]}). Retrieved papers "
+                                 "are listed in the rerank stage.",
+                       "cited": False, "llm": "error"}
+            timings["answer_ms"] = round((time.time() - t2) * 1000, 1)
+            citations = [{"n": i, "arxiv_id": c["arxiv_id"], "title": c["title"],
+                          "url": f"https://arxiv.org/abs/{c['arxiv_id']}"}
+                         for i, c in enumerate(reranked[:req.k_final], 1)]
+            yield {"event": "stage", "data": json.dumps({
+                "stage": "answer",
+                "answer": ans["answer"],
+                "cited": ans.get("cited", False),
+                "llm": ans.get("llm", "?"),
+                "citations": citations,
+                "took_ms": timings["answer_ms"],
+            })}
+            yield {"event": "done", "data": json.dumps({"timings": timings})}
+        except Exception as e:  # noqa: BLE001 — the stream must always terminate
+            log.exception("query pipeline failed")
+            yield {"event": "error", "data": json.dumps({
+                "code": "internal",
+                "message": f"query pipeline failed: {str(e)[:180]}"})}
 
     return EventSourceResponse(gen())
 
 
 # ---------------------------------------------------------------- eval
+
+EVAL_RESULTS_PATH = config.APP_ROOT / "eval" / "results_local_5k.json"
+
 
 @app.post("/api/eval")
 def run_eval(req: EvalReq):
@@ -275,6 +333,14 @@ def run_eval(req: EvalReq):
     return {"n_queries": len(golden),
             "took_s": round(time.time() - t0, 2),
             "metrics": scores}
+
+
+@app.get("/api/eval/results")
+def eval_results():
+    """The measured eval JSON referenced by the landing page."""
+    if not EVAL_RESULTS_PATH.exists():
+        raise HTTPException(404, "eval results not generated yet")
+    return FileResponse(EVAL_RESULTS_PATH, media_type="application/json")
 
 
 # ---------------------------------------------------------------- ui
