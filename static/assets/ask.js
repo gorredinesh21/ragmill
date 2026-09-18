@@ -86,10 +86,13 @@ async function doAsk(){
       const {done, value} = await reader.read(); if(done) break;
       buf += dec.decode(value, {stream:true});
       let idx;
-      while((idx = buf.indexOf('\n\n')) >= 0){
-        const chunk = buf.slice(0, idx); buf = buf.slice(idx+2);
+      // SSE servers may frame with CRLF (sse-starlette: \r\n\r\n), LF, or CR —
+      // splitting on bare "\n\n" parses zero events from CRLF streams.
+      while((idx = buf.search(/\r\n\r\n|\n\n|\r\r/)) >= 0){
+        const sepLen = buf[idx] === '\r' && buf[idx+1] === '\n' ? 4 : 2;
+        const chunk = buf.slice(0, idx); buf = buf.slice(idx + sepLen);
         let ev='message', data='';
-        for(const line of chunk.split('\n')){
+        for(const line of chunk.split(/\r\n|\n|\r/)){
           if(line.startsWith('event:')) ev = line.slice(6).trim();
           if(line.startsWith('data:')) data += line.slice(5).trim();
         }
