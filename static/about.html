@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>About — RAGMill</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cg transform='translate(16 14)' fill='%230d9488'%3E%3Cpath d='M0 0 L-2.2 -10 A2.5 2.5 0 0 1 2.2 -10Z'/%3E%3Cpath d='M0 0 L-2.2 -10 A2.5 2.5 0 0 1 2.2 -10Z' transform='rotate(90)'/%3E%3Cpath d='M0 0 L-2.2 -10 A2.5 2.5 0 0 1 2.2 -10Z' transform='rotate(180)'/%3E%3Cpath d='M0 0 L-2.2 -10 A2.5 2.5 0 0 1 2.2 -10Z' transform='rotate(270)'/%3E%3C/g%3E%3Ccircle cx='16' cy='14' r='2.1' fill='%230f172a'/%3E%3Cpath d='M14.6 16.5 L13.4 27 L18.6 27 L17.4 16.5Z' fill='%2394a3b8'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/assets/style.css">
+</head>
+<body>
+
+<aside class="sidebar">
+  <a class="brand" href="/" aria-label="RAGMill home">
+    <svg class="mill" viewBox="0 0 36 36" width="30" height="30" aria-hidden="true">
+      <g transform="translate(18 15)">
+        <g class="blades">
+          <path d="M0 0 L-2.3 -10.5 A2.6 2.6 0 0 1 2.3 -10.5 Z"/>
+          <path d="M0 0 L-2.3 -10.5 A2.6 2.6 0 0 1 2.3 -10.5 Z" transform="rotate(90)"/>
+          <path d="M0 0 L-2.3 -10.5 A2.6 2.6 0 0 1 2.3 -10.5 Z" transform="rotate(180)"/>
+          <path d="M0 0 L-2.3 -10.5 A2.6 2.6 0 0 1 2.3 -10.5 Z" transform="rotate(270)"/>
+        </g>
+        <circle class="hub" r="2.2"/>
+        <path class="tower" d="M-1.5 2.5 L-2.8 14.5 L2.8 14.5 L1.5 2.5 Z"/>
+      </g>
+    </svg>
+    <span class="brand-name">RAG<b>Mill</b></span>
+  </a>
+  <nav class="nav" aria-label="Main">
+    <a class="nav-link" href="/"><span class="nl">Overview</span><span class="ns">what &amp; why</span></a>
+    <a class="nav-link" href="/ask"><span class="nl">Ask</span><span class="ns">cited answers, live</span></a>
+    <a class="nav-link" href="/sources"><span class="nl">Sources</span><span class="ns">browse the corpus</span></a>
+    <a class="nav-link" href="/eval"><span class="nl">Eval</span><span class="ns">measured numbers</span></a>
+    <a class="nav-link active" href="/about"><span class="nl">About</span><span class="ns">how it's built</span></a>
+  </nav>
+  <div class="sidebar-foot">
+    <a class="gh" href="https://github.com/gorredinesh21/ragmill" target="_blank" rel="noopener">GitHub ↗</a>
+    <span class="stack">FastAPI · fastembed · Qdrant · Gemini</span>
+  </div>
+</aside>
+
+<main class="content">
+
+  <div class="page-head">
+    <h1>How RAGMill is built</h1>
+    <p class="lede">One FastAPI service, one vector store, one embedding model
+      that runs in-process — and a query pipeline small enough to hold in your
+      head.</p>
+  </div>
+
+  <h2>The pipeline, in plain language</h2>
+  <div class="flow">
+    <div class="flow-step"><span class="n">1</span><div>
+      <b>Chunk</b>
+      <p>Each document becomes a chunk (title + abstract — one chunk per paper
+        here, but IDs carry a chunk index so full-text PDFs slot in later).
+        Stubs and duplicates are dropped before anything expensive happens.</p>
+    </div></div>
+    <div class="flow-step"><span class="n">2</span><div>
+      <b>Embed</b>
+      <p>fastembed runs the bge-small-en-v1.5 ONNX model <b>inside the
+        process</b> — 384-dim vectors, no embedding API, no quotas to hit.</p>
+    </div></div>
+    <div class="flow-step"><span class="n">3</span><div>
+      <b>Hybrid search</b>
+      <p>Two engines run on every query: dense vector search (Qdrant, cosine)
+        for meaning, BM25 keyword search for exact terms. Each returns its own
+        ranking of the same corpus.</p>
+    </div></div>
+    <div class="flow-step"><span class="n">4</span><div>
+      <b>Fuse with RRF</b>
+      <p>Reciprocal Rank Fusion merges the two rankings:
+        <code>score(d) = Σ 1/(60 + rank)</code>. Simple, parameter-light, and —
+        measured — better than either engine alone. This is the number the
+        <a href="/eval">Eval page</a> is about.</p>
+    </div></div>
+    <div class="flow-step"><span class="n">5</span><div>
+      <b>Rerank</b>
+      <p>Gemini re-orders the top candidates listwise in a single call.
+        No credentials? A clearly-labeled lexical fallback runs instead —
+        nothing pretends to be a model it isn't.</p>
+    </div></div>
+    <div class="flow-step"><span class="n">6</span><div>
+      <b>Cited answer</b>
+      <p>Gemini writes a short answer grounded in the top passages with
+        [n] citations, streamed to your browser over SSE in three stages
+        (retrieve → rerank → answer) so you see the evidence before the
+        conclusion. Try it on the <a href="/ask">Ask page</a>.</p>
+    </div></div>
+  </div>
+
+  <h2>The million-document plan</h2>
+  <section class="grid2">
+    <div class="card">
+      <h3>Sharded, restartable ingest</h3>
+      <p>Ingestion runs as a <b>Cloud Run Job</b> — 10 parallel tasks, each
+        embedding its slice of the corpus and upserting to Qdrant. Every point
+        ID is a deterministic <code>uuid5</code> of the document ID + chunk,
+        so upserts are <b>idempotent</b>: kill the job mid-run, re-execute, and
+        the count never double-counts (that property is unit-tested). Each
+        task writes progress to a status object so a 1M run is observable.</p>
+    </div>
+    <div class="card">
+      <h3>What the arithmetic says</h3>
+      <p>Measured single-node throughput under heavy load was 4.7 docs/s; the
+        conservative cloud estimate is 150–250 docs/s per shard — so 10 shards
+        ingest <b>1M documents in roughly 7–12 minutes of job time</b>. That
+        full benchmark run is planned, not yet executed; the 5K-scale numbers
+        on the Eval page are measured, and the honest status table lives in
+        the README.</p>
+    </div>
+  </section>
+
+  <h2>Cost</h2>
+  <section class="grid3">
+    <div class="card">
+      <h3>Demo serving</h3>
+      <p>Cloud Run, scale-to-zero, cold-booting from a bundled 23&nbsp;MB index
+        snapshot in seconds: <b>&lt; $1/month</b> idle.</p>
+    </div>
+    <div class="card">
+      <h3>Embeddings</h3>
+      <p>In-process ONNX — <b>$0</b>, and there is no API quota to hit at
+        1M-document scale.</p>
+    </div>
+    <div class="card">
+      <h3>Full 1M ingest run</h3>
+      <p>10 tasks × ~10 min of 1-vCPU time: <b>&lt; $1 per run</b>, and
+        re-runs are no-op upserts.</p>
+    </div>
+  </section>
+
+  <h2>Honest limits (read this part)</h2>
+  <div class="card">
+    <p>This public demo runs on a <b>synthetic corpus</b> — 5,000
+      deterministic, arXiv-<em>style</em> papers generated by a seeded script,
+      not real arXiv metadata. The retrieval metrics on the <a href="/eval">Eval
+      page</a> are real measurements over that synthetic golden set, and the
+      real-arXiv loader (<code>scripts/fetch_arxiv.py</code>) exists for the
+      genuine 1M run. Without an LLM key configured, answers come from a
+      clearly-labeled extractive mock (you can see which backend answered in
+      the answer header on the Ask page). The 1M benchmark is a runnable plan,
+      not a completed run — nothing on this site claims otherwise.</p>
+  </div>
+
+  <h2>Links</h2>
+  <div class="links">
+    <a class="btn ghost" href="/docs">API docs (OpenAPI)</a>
+    <a class="btn ghost" href="https://github.com/gorredinesh21/ragmill" target="_blank" rel="noopener">GitHub repo ↗</a>
+    <a class="btn ghost" href="https://ragmill-yzzxrxetcq-uc.a.run.app" target="_blank" rel="noopener">Live deployment (Cloud Run) ↗</a>
+  </div>
+
+  <footer class="page-foot">
+    <a href="https://github.com/gorredinesh21/ragmill">GitHub</a><span class="dot">·</span>
+    <a href="/docs">API docs</a><span class="dot">·</span>
+    <span>FastAPI · fastembed · Qdrant · Gemini on Cloud Run</span>
+  </footer>
+</main>
+
+<script src="/static/assets/app.js"></script>
+</body>
+</html>

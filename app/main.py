@@ -15,16 +15,19 @@ Endpoints:
                          (alias: POST /api/ask — same stream). Always
                          terminates: `done` on success, `error` otherwise.
   POST /api/eval         {limit?}  golden-set hit@3 / hit@10 / MRR, 3 modes
-  GET   /                demo UI   GET /docs  OpenAPI
+  GET   /api/documents   paginated corpus browse (?q= substring search)
+  GET   /  /ask  /sources  /eval  /about   product pages   GET /docs  OpenAPI
 """
 import json
 import logging
+import math
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
@@ -343,12 +346,98 @@ def eval_results():
     return FileResponse(EVAL_RESULTS_PATH, media_type="application/json")
 
 
+# ---------------------------------------------------------------- documents
+
+DOC_SNIPPET_CHARS = 200   # browse-list snippet length (first ~200 chars)
+DOC_BROWSE_PER_PAGE = 20  # default page size when browsing
+DOC_SEARCH_PER_PAGE = 25  # default page size when searching (?q=)
+
+
+def _corpus_documents(r) -> list[dict]:
+    """The loaded corpus as a stable document list: deduped by arxiv_id
+    (first chunk wins) and sorted by arxiv_id so pagination is stable."""
+    seen: dict[str, dict] = {}
+    for rec in r.records.values():
+        aid = str(rec.get("arxiv_id") or "")
+        if aid and aid not in seen:
+            seen[aid] = rec
+    return [seen[aid] for aid in sorted(seen)]
+
+
+def _snippet(text: str, n: int = DOC_SNIPPET_CHARS) -> str:
+    text = (text or "").strip()
+    return text[:n] + ("…" if len(text) > n else "")
+
+
+@app.get("/api/documents")
+def documents(
+    q: str | None = Query(
+        default=None, min_length=1, max_length=200,
+        description="case-insensitive substring over title + abstract"),
+    page: int = Query(default=1, ge=1, le=100_000),
+    per_page: int | None = Query(default=None, ge=1, le=100),
+):
+    """Browse / search the stored corpus payloads — a plain data endpoint
+    for the Sources page (no retrieval, no LLM)."""
+    needle = (q or "").strip().lower() or None
+    size = per_page or (DOC_SEARCH_PER_PAGE if needle else DOC_BROWSE_PER_PAGE)
+    docs = _corpus_documents(get_retriever())
+    if needle:
+        docs = [d for d in docs if needle in
+                f"{d.get('title', '')} {d.get('abstract', '')}".lower()]
+    total = len(docs)
+    start = (page - 1) * size
+    return {
+        "q": needle,
+        "total": total,
+        "page": page,
+        "per_page": size,
+        "pages": max(1, math.ceil(total / size)),
+        "documents": [{
+            "arxiv_id": d["arxiv_id"],
+            "title": d.get("title", ""),
+            "link": f"https://arxiv.org/abs/{d['arxiv_id']}",
+            "categories": d.get("categories") or [],
+            "snippet": _snippet(d.get("abstract", "")),
+            "abstract": (d.get("abstract") or "").strip(),
+        } for d in docs[start:start + size]],
+    }
+
+
 # ---------------------------------------------------------------- ui
 
-@app.get("/")
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+def _page(name: str) -> FileResponse:
+    return FileResponse(STATIC_DIR / name)
+
+
+@app.get("/", include_in_schema=False)
 def index():
-    return FileResponse(Path(__file__).resolve().parent.parent /
-                        "static" / "index.html")
+    return _page("index.html")
+
+
+@app.get("/ask", include_in_schema=False)
+def ask_page():
+    return _page("ask.html")
+
+
+@app.get("/sources", include_in_schema=False)
+def sources_page():
+    return _page("sources.html")
+
+
+@app.get("/eval", include_in_schema=False)
+def eval_page():
+    return _page("eval.html")
+
+
+@app.get("/about", include_in_schema=False)
+def about_page():
+    return _page("about.html")
 
 
 @app.get("/api/ingest/status")

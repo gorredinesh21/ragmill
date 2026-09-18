@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ask — RAGMill</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cg transform='translate(16 14)' fill='%230d9488'%3E%3Cpath d='M0 0 L-2.2 -10 A2.5 2.5 0 0 1 2.2 -10Z'/%3E%3Cpath d='M0 0 L-2.2 -10 A2.5 2.5 0 0 1 2.2 -10Z' transform='rotate(90)'/%3E%3Cpath d='M0 0 L-2.2 -10 A2.5 2.5 0 0 1 2.2 -10Z' transform='rotate(180)'/%3E%3Cpath d='M0 0 L-2.2 -10 A2.5 2.5 0 0 1 2.2 -10Z' transform='rotate(270)'/%3E%3C/g%3E%3Ccircle cx='16' cy='14' r='2.1' fill='%230f172a'/%3E%3Cpath d='M14.6 16.5 L13.4 27 L18.6 27 L17.4 16.5Z' fill='%2394a3b8'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/assets/style.css">
+</head>
+<body>
+
+<aside class="sidebar">
+  <a class="brand" href="/" aria-label="RAGMill home">
+    <svg class="mill" viewBox="0 0 36 36" width="30" height="30" aria-hidden="true">
+      <g transform="translate(18 15)">
+        <g class="blades">
+          <path d="M0 0 L-2.3 -10.5 A2.6 2.6 0 0 1 2.3 -10.5 Z"/>
+          <path d="M0 0 L-2.3 -10.5 A2.6 2.6 0 0 1 2.3 -10.5 Z" transform="rotate(90)"/>
+          <path d="M0 0 L-2.3 -10.5 A2.6 2.6 0 0 1 2.3 -10.5 Z" transform="rotate(180)"/>
+          <path d="M0 0 L-2.3 -10.5 A2.6 2.6 0 0 1 2.3 -10.5 Z" transform="rotate(270)"/>
+        </g>
+        <circle class="hub" r="2.2"/>
+        <path class="tower" d="M-1.5 2.5 L-2.8 14.5 L2.8 14.5 L1.5 2.5 Z"/>
+      </g>
+    </svg>
+    <span class="brand-name">RAG<b>Mill</b></span>
+  </a>
+  <nav class="nav" aria-label="Main">
+    <a class="nav-link" href="/"><span class="nl">Overview</span><span class="ns">what &amp; why</span></a>
+    <a class="nav-link active" href="/ask"><span class="nl">Ask</span><span class="ns">cited answers, live</span></a>
+    <a class="nav-link" href="/sources"><span class="nl">Sources</span><span class="ns">browse the corpus</span></a>
+    <a class="nav-link" href="/eval"><span class="nl">Eval</span><span class="ns">measured numbers</span></a>
+    <a class="nav-link" href="/about"><span class="nl">About</span><span class="ns">how it's built</span></a>
+  </nav>
+  <div class="sidebar-foot">
+    <a class="gh" href="https://github.com/gorredinesh21/ragmill" target="_blank" rel="noopener">GitHub ↗</a>
+    <span class="stack">FastAPI · fastembed · Qdrant · Gemini</span>
+  </div>
+</aside>
+
+<main class="content">
+
+  <div class="page-head">
+    <h1>Ask the corpus</h1>
+    <p class="lede"><b>Search</b> shows the raw hybrid matches with scores.
+      <b>Ask</b> streams the full pipeline — retrieved passages → rerank →
+      a short answer with [1][2] citations linked to numbered sources.</p>
+    <p id="corpusStatus" class="corpus-status"><span class="dot"></span>checking corpus…</p>
+  </div>
+
+  <div class="demo card">
+    <label for="q">Your question</label>
+    <div class="qrow">
+      <input id="q" type="text" enterkeyhint="search"
+             placeholder="e.g. How do you make transformers handle long documents?"
+             value="sparse attention for long-document language modeling">
+    </div>
+    <div class="btns">
+      <button id="askBtn" class="btn primary" onclick="doAsk()">Ask — answer with sources</button>
+      <button id="searchBtn" class="btn ghost" onclick="doSearch()">Search only (see the raw matches)</button>
+    </div>
+    <div class="chips">
+      <span class="lbl">Try:</span>
+      <button class="chip" onclick="useChip(this)">sparse attention for long-document language modeling</button>
+      <button class="chip" onclick="useChip(this)">reciprocal rank fusion for hybrid retrieval</button>
+      <button class="chip" onclick="useChip(this)">dense passage retrieval for question answering</button>
+      <button class="chip" onclick="useChip(this)">billion-scale nearest neighbor search with HNSW indexing</button>
+      <button class="chip" onclick="useChip(this)">federated learning across hospital networks</button>
+    </div>
+    <div id="meta"></div>
+  </div>
+
+  <!-- streamed results land here -->
+  <div id="out"></div>
+
+  <footer class="page-foot">
+    <a href="https://github.com/gorredinesh21/ragmill">GitHub</a><span class="dot">·</span>
+    <a href="/docs">API docs</a><span class="dot">·</span>
+    <span>FastAPI · fastembed · Qdrant · Gemini on Cloud Run</span>
+  </footer>
+</main>
+
+<script src="/static/assets/app.js"></script>
+<script src="/static/assets/ask.js"></script>
+</body>
+</html>

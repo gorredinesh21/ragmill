@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eval — RAGMill</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cg transform='translate(16 14)' fill='%230d9488'%3E%3Cpath d='M0 0 L-2.2 -10 A2.5 2.5 0 0 1 2.2 -10Z'/%3E%3Cpath d='M0 0 L-2.2 -10 A2.5 2.5 0 0 1 2.2 -10Z' transform='rotate(90)'/%3E%3Cpath d='M0 0 L-2.2 -10 A2.5 2.5 0 0 1 2.2 -10Z' transform='rotate(180)'/%3E%3Cpath d='M0 0 L-2.2 -10 A2.5 2.5 0 0 1 2.2 -10Z' transform='rotate(270)'/%3E%3C/g%3E%3Ccircle cx='16' cy='14' r='2.1' fill='%230f172a'/%3E%3Cpath d='M14.6 16.5 L13.4 27 L18.6 27 L17.4 16.5Z' fill='%2394a3b8'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/assets/style.css">
+</head>
+<body>
+
+<aside class="sidebar">
+  <a class="brand" href="/" aria-label="RAGMill home">
+    <svg class="mill" viewBox="0 0 36 36" width="30" height="30" aria-hidden="true">
+      <g transform="translate(18 15)">
+        <g class="blades">
+          <path d="M0 0 L-2.3 -10.5 A2.6 2.6 0 0 1 2.3 -10.5 Z"/>
+          <path d="M0 0 L-2.3 -10.5 A2.6 2.6 0 0 1 2.3 -10.5 Z" transform="rotate(90)"/>
+          <path d="M0 0 L-2.3 -10.5 A2.6 2.6 0 0 1 2.3 -10.5 Z" transform="rotate(180)"/>
+          <path d="M0 0 L-2.3 -10.5 A2.6 2.6 0 0 1 2.3 -10.5 Z" transform="rotate(270)"/>
+        </g>
+        <circle class="hub" r="2.2"/>
+        <path class="tower" d="M-1.5 2.5 L-2.8 14.5 L2.8 14.5 L1.5 2.5 Z"/>
+      </g>
+    </svg>
+    <span class="brand-name">RAG<b>Mill</b></span>
+  </a>
+  <nav class="nav" aria-label="Main">
+    <a class="nav-link" href="/"><span class="nl">Overview</span><span class="ns">what &amp; why</span></a>
+    <a class="nav-link" href="/ask"><span class="nl">Ask</span><span class="ns">cited answers, live</span></a>
+    <a class="nav-link" href="/sources"><span class="nl">Sources</span><span class="ns">browse the corpus</span></a>
+    <a class="nav-link active" href="/eval"><span class="nl">Eval</span><span class="ns">measured numbers</span></a>
+    <a class="nav-link" href="/about"><span class="nl">About</span><span class="ns">how it's built</span></a>
+  </nav>
+  <div class="sidebar-foot">
+    <a class="gh" href="https://github.com/gorredinesh21/ragmill" target="_blank" rel="noopener">GitHub ↗</a>
+    <span class="stack">FastAPI · fastembed · Qdrant · Gemini</span>
+  </div>
+</aside>
+
+<main class="content">
+
+  <div class="page-head">
+    <h1>Eval — measured, not vibes</h1>
+    <p class="lede">The hybrid-beats-dense claim is a number on this page and a
+      test in CI (<code>pytest tests/test_retrieval.py</code> fails if RRF
+      fusion ever loses to dense-only). The golden set: 60 auto-generated
+      queries, each with one known-correct document.</p>
+  </div>
+
+  <h2>Stored results — measured on the 5K corpus</h2>
+  <div id="storedCards" class="mode-grid"></div>
+  <p id="storedMeta" class="muted" style="font-size:13px">loading stored results…</p>
+  <p class="legend"><b>hit@3</b> — of the queries, the fraction where the right
+    document appears in the top 3 results. <b>hit@10</b> — same, for the top
+    10: the practical "did the answer's evidence get retrieved at all" number.
+    <b>MRR</b> (mean reciprocal rank) — how high the right document ranks,
+    where 1.0 means always first and 0.5 means second on average. Higher is
+    better everywhere.</p>
+
+  <h2>Run it yourself, live</h2>
+  <div class="card">
+    <p>This button replays the <b>60 golden queries</b> against the retriever
+      this server has loaded <b>right now</b> (<code>POST /api/eval</code>
+      with <code>{"limit": 60}</code>). It usually finishes in ~10–20 seconds;
+      the table that appears is clearly a live run, separate from the stored
+      numbers above.</p>
+    <div class="cta-row" style="margin-top:14px">
+      <button id="runEvalBtn" class="btn primary">Run a live mini-eval</button>
+    </div>
+    <div id="liveOut"></div>
+  </div>
+
+  <footer class="page-foot">
+    <a href="https://github.com/gorredinesh21/ragmill">GitHub</a><span class="dot">·</span>
+    <a href="/docs">API docs</a><span class="dot">·</span>
+    <span>FastAPI · fastembed · Qdrant · Gemini on Cloud Run</span>
+  </footer>
+</main>
+
+<script src="/static/assets/app.js"></script>
+<script src="/static/assets/eval.js"></script>
+</body>
+</html>
